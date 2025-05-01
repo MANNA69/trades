@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MANNA Trading App</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+    header { background: #B78007; color: white; padding: 1em; text-align: center; }
+    main { padding: 2em; }
+    .admin-panel { border: 2px solid #B78007; padding: 1em; margin-top: 2em; display: none; }
+    textarea { width: 100%; height: 80px; }
+    .log { white-space: pre-wrap; background: #f1f1f1; padding: 10px; margin-top: 10px; height: 200px; overflow-y: scroll; }
+    button { margin-top: 10px; padding: 10px; background: #B78007; color: white; border: none; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MANNA Deriv Trading App</h1>
+  </header>
+
+  <main>
+    <button id="login-btn">Login with Deriv</button>
+    <div id="account-info"></div>
+    <div>
+      <label for="symbol-select">Select Synthetic Index:</label>
+      <select id="symbol-select">
+        <option value="boom_1000_index">Boom 1000</option>
+        <option value="crash_1000_index">Crash 1000</option>
+        <option value="R_10">Volatility 10</option>
+        <option value="R_10_1s">Volatility 10 (1s)</option>
+        <option value="R_25">Volatility 25</option>
+        <option value="R_75_1s">Volatility 75 (1s)</option>
+        <option value="R_100">Volatility 100</option>
+      </select>
+    </div>
+
+    <!-- Admin Panel -->
+    <div class="admin-panel" id="admin-panel">
+      <h2>Admin Dashboard</h2>
+      <div><strong>Balance:</strong> <span id="balance">Loading...</span></div>
+
+      <h3>Client Tokens</h3>
+      <textarea id="client-tokens"></textarea><br/>
+      <button onclick="saveTokens()">Save Tokens</button>
+      <button onclick="clearTokens()">Clear Tokens</button>
+
+      <h3>Copy Trade</h3>
+      <button onclick="copyTrade()">Send Copy Trade</button>
+
+      <h3>Trade Log</h3>
+      <div class="log" id="trade-log"></div>
+    </div>
+  </main>
+
+  <script>
+    const app_id = 72379;
+    let ws, token;
+
+    const loginBtn = document.getElementById('login-btn');
+    const accountInfo = document.getElementById('account-info');
+    const adminPanel = document.getElementById('admin-panel');
+    const tradeLog = document.getElementById('trade-log');
+    const balanceSpan = document.getElementById('balance');
+
+    loginBtn.onclick = () => {
+      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${app_id}&redirect_uri=${window.location.origin}`;
+    };
+
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('token')) {
+      token = urlParams.get('token');
+      localStorage.setItem('token', token);
+    } else {
+      token = localStorage.getItem('token');
+    }
+
+    if (token) {
+      connect(token);
+    }
+
+    function connect(tok) {
+      ws = new WebSocket('wss://ws.derivws.com/websockets/v3');
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ authorize: tok }));
+      };
+      ws.onmessage = msg => {
+        const data = JSON.parse(msg.data);
+
+        if (data.msg_type === 'authorize') {
+          const id = data.authorize.loginid;
+          accountInfo.innerText = `Logged in as: ${id}`;
+          if (id === 'CR621908') {
+            adminPanel.style.display = 'block';
+            subscribeBalance();
+            loadTokens();
+          }
+        }
+
+        if (data.msg_type === 'balance') {
+          balanceSpan.innerText = `${data.balance.balance} ${data.balance.currency}`;
+        }
+
+        if (data.msg_type === 'buy') {
+          logTrade(`Master Trade Result: ${data.buy.longcode}`);
+        }
+      };
+    }
+
+    function subscribeBalance() {
+      ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
+    }
+
+    function saveTokens() {
+      const raw = document.getElementById('client-tokens').value.trim();
+      localStorage.setItem('client_tokens', raw);
+      alert('Tokens saved.');
+    }
+
+    function loadTokens() {
+      const raw = localStorage.getItem('client_tokens') || '';
+      document.getElementById('client-tokens').value = raw;
+    }
+
+    function clearTokens() {
+      localStorage.removeItem('client_tokens');
+      document.getElementById('client-tokens').value = '';
+      alert('Tokens cleared.');
+    }
+
+    function copyTrade() {
+      const tokens = (localStorage.getItem('client_tokens') || '').split("\n");
+      const symbol = document.getElementById('symbol-select').value;
+      tokens.forEach(tok => {
+        if (!tok.trim()) return;
+        const ws2 = new WebSocket('wss://ws.derivws.com/websockets/v3');
+        ws2.onopen = () => {
+          ws2.send(JSON.stringify({ authorize: tok.trim() }));
+        };
+        ws2.onmessage = e => {
+          const d = JSON.parse(e.data);
+          if (d.msg_type === 'authorize') {
+            const buy_req = {
+              buy: 1,
+              price: 1,
+              parameters: {
+                amount: 1,
+                basis: "stake",
+                contract_type: "CALL",
+                currency: "USD",
+                duration: 1,
+                duration_unit: "m",
+                symbol: symbol
+              }
+            };
+            ws2.send(JSON.stringify(buy_req));
+          }
+          if (d.msg_type === 'buy') {
+            logTrade(`Copied to ${d.echo_req.authorize}: ${d.buy.longcode}`);
+          }
+        };
+      });
+    }
+
+    function logTrade(msg) {
+      tradeLog.innerText += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+      tradeLog.scrollTop = tradeLog.scrollHeight;
+    }
+  </script>
+</body>
+</html>
